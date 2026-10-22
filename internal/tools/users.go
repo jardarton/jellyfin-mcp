@@ -13,10 +13,16 @@ func (t *Tools) registerUsers(server *mcp.Server) {
 		readOnly:    true,
 	}, t.users)
 	add(t, server, tool{
-		name: "set_played",
-		description: "Mark items watched or unwatched for the user. Marking a series or season marks all its episodes; " +
-			"marking unwatched also clears where playback stopped.",
-	}, t.setPlayed)
+		name: "mark_played",
+		description: "Mark items watched for the user, as if played to the end: this counts a play and forgets where playback stopped. " +
+			"Marking a series, season or album marks everything in it.",
+	}, t.markPlayed)
+	add(t, server, tool{
+		name: "mark_unplayed",
+		description: "Mark items unwatched for the user. This erases their play count, last played date and where playback stopped. " +
+			"Marking a series, season or album marks everything in it.",
+		destructive: true,
+	}, t.markUnplayed)
 	add(t, server, tool{
 		name:        "set_favorite",
 		description: "Add items to or remove them from the user's favorites.",
@@ -61,9 +67,8 @@ func (t *Tools) users(ctx context.Context, _ usersIn) (usersOut, error) {
 	return out, nil
 }
 
-type setPlayedIn struct {
-	Items  []string `json:"items" jsonschema:"item ids, or names with an optional (year)"`
-	Played bool     `json:"played" jsonschema:"true to mark watched, false to mark unwatched"`
+type itemsIn struct {
+	Items []string `json:"items" jsonschema:"item ids, or names with an optional (year)"`
 	userIn
 }
 
@@ -78,7 +83,15 @@ type changedOut struct {
 	Items []item `json:"items" jsonschema:"the items with their new state"`
 }
 
-func (t *Tools) setPlayed(ctx context.Context, in setPlayedIn) (changedOut, error) {
+func (t *Tools) markPlayed(ctx context.Context, in itemsIn) (changedOut, error) {
+	return t.setPlayed(ctx, in, true)
+}
+
+func (t *Tools) markUnplayed(ctx context.Context, in itemsIn) (changedOut, error) {
+	return t.setPlayed(ctx, in, false)
+}
+
+func (t *Tools) setPlayed(ctx context.Context, in itemsIn, played bool) (changedOut, error) {
 	u, err := t.user(ctx, in.User)
 	if err != nil {
 		return changedOut{}, err
@@ -89,7 +102,7 @@ func (t *Tools) setPlayed(ctx context.Context, in setPlayedIn) (changedOut, erro
 	}
 	out := changedOut{User: u.Name, Items: make([]item, len(its))}
 	for i, it := range its {
-		d, err := t.c.SetPlayed(ctx, u.ID, it.ID, in.Played)
+		d, err := t.c.SetPlayed(ctx, u.ID, it.ID, played)
 		if err != nil {
 			return changedOut{}, err
 		}

@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -39,6 +41,7 @@ Configuration comes from the environment:
   JELLYFIN_MCP_ADDR           listen address for http, default :8080
   JELLYFIN_MCP_AUTH_TOKEN     require "Authorization: Bearer <token>" on http
   JELLYFIN_MCP_AUTH_TOKEN_FILE  file holding the bearer token
+  JELLYFIN_MCP_ALLOWED_HOSTS  comma-separated host names http answers to, against DNS rebinding
   JELLYFIN_MCP_READ_ONLY      true to leave out every tool that changes the server
 
 Over http, MCP is served at /mcp and a health check at /healthz.
@@ -108,17 +111,24 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		return serveHTTP(ctx, *addr, server, token, readOnly)
+		hosts := strings.FieldsFunc(os.Getenv("JELLYFIN_MCP_ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })
+		return serveHTTP(ctx, *addr, server, token, hosts, readOnly)
 	}
 	return fmt.Errorf("unknown transport %q; use stdio or http", *transport)
 }
 
-func serveHTTP(ctx context.Context, addr string, server *mcp.Server, token string, readOnly bool) error {
+func serveHTTP(ctx context.Context, addr string, server *mcp.Server, token string, hosts []string, readOnly bool) error {
 	var h http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	if token != "" {
 		h = requireToken(token, h)
+	} else {
+		slog.Warn("serving MCP without authentication; set JELLYFIN_MCP_AUTH_TOKEN unless only trusted clients can reach it")
 	}
+	if len(hosts) > 0 {
+		h = allowHosts(hosts, h)
+	}
+	h = http.NewCrossOriginProtection().Handler(h)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +138,7 @@ func serveHTTP(ctx context.Context, addr string, server *mcp.Server, token strin
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	slog.Info("jellyfin-mcp listening", "addr", addr, "version", version, "auth", token != "", "read_only", readOnly)
+	slog.Info("jellyfin-mcp listening", "addr", addr, "version", version, "auth", token != "", "allowed_hosts", hosts, "read_only", readOnly)
 
 	select {
 	case err := <-errc:
@@ -151,6 +161,23 @@ func requireToken(token string, next http.Handler) http.Handler {
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), want) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// allowHosts rejects requests whose Host header is not one of hosts, so a
+// browser can't be pointed at the server through a rebound DNS name.
+func allowHosts(hosts []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		host = strings.TrimSuffix(strings.Trim(host, "[]"), ".")
+		if !slices.ContainsFunc(hosts, func(h string) bool { return strings.EqualFold(h, host) }) {
+			http.Error(w, "host not allowed", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
