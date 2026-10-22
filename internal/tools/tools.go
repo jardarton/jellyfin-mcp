@@ -4,6 +4,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -189,15 +190,26 @@ func clock(ticks int64) string {
 	return fmt.Sprintf("%d:%02d:%02d", s/3600, s/60%60, s%60)
 }
 
-// parseClock reads h:mm:ss, mm:ss or seconds into ticks.
+// maxClock bounds positions parseClock accepts, in seconds, well below tick overflow.
+const maxClock = 1000 * 3600
+
+// parseClock reads h:mm:ss, m:ss or seconds into ticks.
 func parseClock(s string) (int64, error) {
+	parts := strings.Split(strings.TrimSpace(s), ":")
+	if len(parts) > 3 {
+		return 0, fmt.Errorf("position %q is not h:mm:ss", s)
+	}
 	var secs int64
-	for part := range strings.SplitSeq(strings.TrimSpace(s), ":") {
-		var n int64
-		if _, err := fmt.Sscanf(part, "%d", &n); err != nil || n < 0 {
+	for i, part := range parts {
+		n, err := strconv.ParseInt(part, 10, 64)
+		if err != nil || n < 0 || i > 0 && n >= 60 || len(part) > 7 {
 			return 0, fmt.Errorf("position %q is not h:mm:ss", s)
 		}
 		secs = secs*60 + n
+	}
+	// At most 3 parts of 7 digits each, so secs can't overflow.
+	if secs > maxClock {
+		return 0, fmt.Errorf("position %q is too far in", s)
 	}
 	return secs * jellyfin.TicksPerSecond, nil
 }

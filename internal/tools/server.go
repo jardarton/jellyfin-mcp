@@ -14,7 +14,7 @@ import (
 func (t *Tools) registerServer(server *mcp.Server) {
 	add(t, server, tool{
 		name:        "server_info",
-		description: "The Jellyfin server's name, version and platform, and whether it needs a restart or has an update.",
+		description: "The Jellyfin server's name and version, and whether it is waiting for a restart.",
 		readOnly:    true,
 	}, t.serverInfo)
 	add(t, server, tool{
@@ -28,8 +28,10 @@ func (t *Tools) registerServer(server *mcp.Server) {
 		readOnly:    true,
 	}, t.activityLog)
 	add(t, server, tool{
-		name:        "run_task",
-		description: "Start a scheduled task now. It runs in the background; follow it with scheduled_tasks.",
+		name: "run_task",
+		description: "Start a scheduled task now. It runs in the background; follow it with scheduled_tasks. " +
+			"Some tasks delete data, such as the ones that clean up the activity log, user data or transcodes.",
+		destructive: true,
 	}, t.runTask)
 	add(t, server, tool{
 		name: "scan_library",
@@ -46,14 +48,13 @@ func (t *Tools) registerServer(server *mcp.Server) {
 
 type serverInfoIn struct{}
 
+// serverInfoOut leaves out the platform and update fields of /System/Info,
+// which Jellyfin 10.11 no longer fills in.
 type serverInfoOut struct {
-	Name            string `json:"name"`
-	Version         string `json:"version"`
-	OS              string `json:"os,omitempty"`
-	Architecture    string `json:"architecture,omitempty"`
-	PendingRestart  bool   `json:"pending_restart"`
-	UpdateAvailable bool   `json:"update_available"`
-	ShuttingDown    bool   `json:"shutting_down,omitempty"`
+	Name           string `json:"name"`
+	Version        string `json:"version"`
+	PendingRestart bool   `json:"pending_restart"`
+	ShuttingDown   bool   `json:"shutting_down,omitempty"`
 }
 
 func (t *Tools) serverInfo(ctx context.Context, _ serverInfoIn) (serverInfoOut, error) {
@@ -62,13 +63,10 @@ func (t *Tools) serverInfo(ctx context.Context, _ serverInfoIn) (serverInfoOut, 
 		return serverInfoOut{}, err
 	}
 	return serverInfoOut{
-		Name:            s.ServerName,
-		Version:         s.Version,
-		OS:              s.OperatingSystemDisplayName,
-		Architecture:    s.SystemArchitecture,
-		PendingRestart:  s.HasPendingRestart,
-		UpdateAvailable: s.HasUpdateAvailable,
-		ShuttingDown:    s.IsShuttingDown,
+		Name:           s.ServerName,
+		Version:        s.Version,
+		PendingRestart: s.HasPendingRestart,
+		ShuttingDown:   s.IsShuttingDown,
 	}, nil
 }
 

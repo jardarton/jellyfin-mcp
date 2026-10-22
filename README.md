@@ -19,10 +19,10 @@ It is a single static Go binary built with the official [MCP Go SDK](https://git
 | `playlists` | Playlists, or the items of one |
 | `users` | Users and when they were last active |
 | `sessions` | Connected clients and what they are playing, including transcode reasons |
-| `server_info` | Version, pending restart and available update |
+| `server_info` | Version and whether a restart is pending |
 | `scheduled_tasks` | Scheduled tasks and how their last run went |
 | `activity_log` | The server's activity log |
-| `set_played` | Mark items watched or unwatched |
+| `mark_played`, `mark_unplayed` | Mark items watched or unwatched |
 | `set_favorite` | Add or remove favorites |
 | `create_playlist`, `add_to_playlist`, `remove_from_playlist` | Manage playlists |
 | `control_playback` | Play, queue, pause, stop, skip or seek on a client |
@@ -31,7 +31,9 @@ It is a single static Go binary built with the official [MCP Go SDK](https://git
 | `refresh_metadata` | Rescan an item and look up missing metadata and images |
 | `run_task` | Start a scheduled task |
 
-Items can be given by id or by name, with an optional year: `"Metropolis (1927)"`. When a name matches several items, the error lists them with their ids. Tools carry MCP annotations: everything that only reads is marked read-only, and `remove_from_playlist` is the only one marked destructive.
+Items can be given by id or by name, with an optional year: `"Metropolis (1927)"`. When a name matches several items, the error lists them with their ids.
+
+Tools carry MCP annotations, so a client or gateway can ask before risky calls. Everything that only reads is marked read-only. `mark_played` and `mark_unplayed` (which overwrite play counts and resume positions, for everything in a series or album), `remove_from_playlist` and `run_task` (some tasks delete data) are marked destructive.
 
 Watch state, favorites, continue watching, next up and playlists belong to a Jellyfin user. Calls take a `user` name; without one they use `JELLYFIN_USER`, or the server's only user.
 
@@ -45,13 +47,14 @@ Create an API key in Jellyfin under Dashboard → API Keys, then configure the s
 | `JELLYFIN_API_KEY` | The API key. Required, unless `JELLYFIN_API_KEY_FILE` names a file holding it. |
 | `JELLYFIN_USER` | User name or id that tools act for when a call names none. |
 | `JELLYFIN_MCP_TRANSPORT` | `stdio` (default) or `http`. The container image defaults to `http`. |
-| `JELLYFIN_MCP_ADDR` | Listen address for `http`, default `:8080`. |
+| `JELLYFIN_MCP_ADDR` | Listen address for `http`, default `127.0.0.1:8080`. The container image uses `:8080`. |
 | `JELLYFIN_MCP_AUTH_TOKEN` | When set, `http` requires `Authorization: Bearer <token>`. Or use `JELLYFIN_MCP_AUTH_TOKEN_FILE`. |
+| `JELLYFIN_MCP_ALLOWED_HOSTS` | Comma-separated host names that `http` answers to, such as `jellyfin-mcp,mcp.example.com`, or `*` for any. Guards against DNS rebinding. |
 | `JELLYFIN_MCP_READ_ONLY` | `true` leaves out every tool that changes something. |
 
-Over HTTP, MCP is served at `/mcp` (stateless, JSON responses) and a health check at `/healthz`.
+Over HTTP, MCP is served at `/mcp` (stateless, JSON responses) and a health check at `/healthz`. Listening beyond loopback requires `JELLYFIN_MCP_AUTH_TOKEN` or `JELLYFIN_MCP_ALLOWED_HOSTS`; without either the server refuses to start.
 
-A Jellyfin API key has administrator rights. Keep the HTTP endpoint on a private network or behind `JELLYFIN_MCP_AUTH_TOKEN`, and use `JELLYFIN_MCP_READ_ONLY=true` when the agent only needs to look.
+A Jellyfin API key has administrator rights. Keep the HTTP endpoint on a private network or behind `JELLYFIN_MCP_AUTH_TOKEN`, set `JELLYFIN_MCP_ALLOWED_HOSTS` to the names clients use, and use `JELLYFIN_MCP_READ_ONLY=true` when the agent only needs to look. Cross-origin browser requests are always refused.
 
 ## Running
 
@@ -63,6 +66,7 @@ Images for amd64 and arm64 are published to `ghcr.io/jardarton/jellyfin-mcp`: `l
 docker run -p 8080:8080 \
   -e JELLYFIN_URL=http://jellyfin:8096 \
   -e JELLYFIN_API_KEY=... \
+  -e JELLYFIN_MCP_AUTH_TOKEN=... \
   ghcr.io/jardarton/jellyfin-mcp:latest
 ```
 

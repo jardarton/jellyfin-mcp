@@ -265,6 +265,7 @@ func (c *Client) AddToPlaylist(ctx context.Context, playlistID, userID string, i
 func (c *Client) PlaylistItems(ctx context.Context, playlistID, userID string) (ItemsResult, error) {
 	v := url.Values{}
 	set(v, "userId", userID)
+	v.Set("fields", "OriginalTitle")
 	v.Set("enableImages", "false")
 	var r ItemsResult
 	err := c.get(ctx, "Playlists/"+url.PathEscape(playlistID)+"/Items", v, &r)

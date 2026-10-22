@@ -75,11 +75,7 @@ func (t *Tools) item(ctx context.Context, ref, userID string, types ...string) (
 		return it, err
 	}
 
-	name, year := ref, 0
-	if m := yearPattern.FindStringSubmatch(ref); m != nil {
-		name = m[1]
-		year, _ = strconv.Atoi(m[2])
-	}
+	name, year := splitYear(ref)
 	kinds := types
 	if len(kinds) == 0 {
 		kinds = searchTypes
@@ -88,6 +84,7 @@ func (t *Tools) item(ctx context.Context, ref, userID string, types ...string) (
 		UserID:     userID,
 		SearchTerm: name,
 		Types:      kinds,
+		Fields:     []string{"OriginalTitle"},
 		Recursive:  true,
 		Limit:      25,
 	}
@@ -99,12 +96,7 @@ func (t *Tools) item(ctx context.Context, ref, userID string, types ...string) (
 		return jellyfin.Item{}, err
 	}
 
-	var exact []jellyfin.Item
-	for _, it := range r.Items {
-		if strings.EqualFold(it.Name, name) || strings.EqualFold(it.OriginalTitle, name) {
-			exact = append(exact, it)
-		}
-	}
+	exact := named(r.Items, name, year)
 	switch {
 	case len(exact) == 1:
 		return exact[0], nil
@@ -120,6 +112,31 @@ func (t *Tools) item(ctx context.Context, ref, userID string, types ...string) (
 		kind = strings.ToLower(types[0])
 	}
 	return jellyfin.Item{}, fmt.Errorf("no %s named %q; try find_items with a shorter query", kind, ref)
+}
+
+// splitYear splits "Name (1999)" into its name and year; year is 0 without one.
+func splitYear(ref string) (string, int) {
+	if m := yearPattern.FindStringSubmatch(ref); m != nil {
+		year, _ := strconv.Atoi(m[2])
+		return m[1], year
+	}
+	return ref, 0
+}
+
+// named returns the items whose name or original title is name, and whose
+// year is year unless it is 0.
+func named(its []jellyfin.Item, name string, year int) []jellyfin.Item {
+	if name == "" {
+		return nil
+	}
+	var out []jellyfin.Item
+	for _, it := range its {
+		if (strings.EqualFold(it.Name, name) || strings.EqualFold(it.OriginalTitle, name)) &&
+			(year == 0 || it.ProductionYear == year) {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 func ambiguous(ref string, its []jellyfin.Item) error {

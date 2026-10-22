@@ -175,15 +175,11 @@ type TranscodingInfo struct {
 
 // SystemInfo is the server's /System/Info.
 type SystemInfo struct {
-	ServerName                 string `json:"ServerName"`
-	Version                    string `json:"Version"`
-	ProductName                string `json:"ProductName"`
-	OperatingSystemDisplayName string `json:"OperatingSystemDisplayName"`
-	SystemArchitecture         string `json:"SystemArchitecture"`
-	HasPendingRestart          bool   `json:"HasPendingRestart"`
-	HasUpdateAvailable         bool   `json:"HasUpdateAvailable"`
-	IsShuttingDown             bool   `json:"IsShuttingDown"`
-	StartupWizardCompleted     *bool  `json:"StartupWizardCompleted"`
+	ServerName        string `json:"ServerName"`
+	Version           string `json:"Version"`
+	ProductName       string `json:"ProductName"`
+	HasPendingRestart bool   `json:"HasPendingRestart"`
+	IsShuttingDown    bool   `json:"IsShuttingDown"`
 }
 
 // Task is a scheduled task.
