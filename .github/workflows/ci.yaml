@@ -1,0 +1,89 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      - run: nix flake check -L
+      - name: Tag matches the version in flake.nix
+        if: github.ref_type == 'tag'
+        run: test "$(nix eval --raw .#packages.x86_64-linux.default.version)" = "${GITHUB_REF_NAME#v}"
+
+  # Builds the image on each architecture and pushes it under a per-arch tag;
+  # the manifest job joins them under the public tags.
+  image:
+    needs: check
+    if: github.event_name == 'push'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      - run: nix build -L .#image
+      - name: Push
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          nix develop -c sh -euc '
+            echo "$TOKEN" | skopeo login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+            skopeo copy --retry-times 3 docker-archive:result "docker://$IMAGE:sha-${GITHUB_SHA::7}-$ARCH"
+          '
+
+  manifest:
+    needs: image
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+    steps:
+      - name: Tags
+        id: tags
+        run: |
+          sha="sha-${GITHUB_SHA::7}"
+          tags="$sha"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            v="${GITHUB_REF_NAME#v}"
+            tags="$tags $v ${v%.*} latest"
+          else
+            tags="$tags main"
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Push manifest
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.tags.outputs.sha }}
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          args=()
+          for t in $TAGS; do args+=(-t "$IMAGE:$t"); done
+          docker buildx imagetools create "${args[@]}" "$IMAGE:$SHA-amd64" "$IMAGE:$SHA-arm64"
+          docker buildx imagetools inspect "$IMAGE:$SHA"
