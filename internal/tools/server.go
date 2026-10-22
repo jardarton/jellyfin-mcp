@@ -39,6 +39,7 @@ func (t *Tools) registerServer(server *mcp.Server) {
 		description: "Scan one library, or all of them, for new, changed and removed files, as Jellyfin's scheduled scan does. " +
 			"It runs in the background; new items show up in latest as they are found. Like the scheduled scan, it re-reads " +
 			"changed files and refreshes the metadata of items due for the library's automatic refresh.",
+		destructive: true,
 	}, t.scanLibrary)
 	add(t, server, tool{
 		name: "refresh_metadata",
@@ -46,7 +47,7 @@ func (t *Tools) registerServer(server *mcp.Server) {
 			"for example when a poster, overview or new episode is missing. Refreshing a series or season includes its episodes. " +
 			"Re-reading the files recalculates runtime, streams and chapters, and can overwrite other fields: " +
 			"in a library that uses embedded titles the name becomes the title stored in the file, an embedded sort title " +
-			"replaces the sort name, and with embedded episode info episode numbers can change. A locked name is kept.",
+			"replaces the sort name, and with embedded episode info MP4 episode numbers can change. A locked name is kept.",
 		destructive: true,
 	}, t.refreshMetadata)
 }
