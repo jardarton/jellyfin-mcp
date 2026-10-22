@@ -53,6 +53,24 @@ func TestSecret(t *testing.T) {
 	}
 }
 
+func TestLoopback(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:8080": true,
+		"[::1]:8080":     true,
+		"localhost:8080": true,
+		":8080":          false,
+		"0.0.0.0:8080":   false,
+		"[::]:8080":      false,
+		"10.0.0.5:8080":  false,
+		"example:8080":   false,
+		"garbage":        false,
+	} {
+		if got := loopback(addr); got != want {
+			t.Errorf("loopback(%q) = %v", addr, got)
+		}
+	}
+}
+
 func TestAllowHosts(t *testing.T) {
 	h := allowHosts([]string{"jellyfin-mcp", "mcp.example.com", "::1"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTeapot)

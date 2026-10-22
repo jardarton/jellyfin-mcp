@@ -29,7 +29,7 @@ var version = "dev"
 
 const usage = `jellyfin-mcp serves a Jellyfin server as MCP tools.
 
-Usage: jellyfin-mcp [-transport stdio|http] [-addr :8080]
+Usage: jellyfin-mcp [-transport stdio|http] [-addr 127.0.0.1:8080]
 
 Configuration comes from the environment:
 
@@ -38,10 +38,12 @@ Configuration comes from the environment:
   JELLYFIN_API_KEY_FILE       file holding the API key, instead of JELLYFIN_API_KEY
   JELLYFIN_USER               user name or id that tools act for when a call names none
   JELLYFIN_MCP_TRANSPORT      stdio (default) or http
-  JELLYFIN_MCP_ADDR           listen address for http, default :8080
+  JELLYFIN_MCP_ADDR           listen address for http, default 127.0.0.1:8080
   JELLYFIN_MCP_AUTH_TOKEN     require "Authorization: Bearer <token>" on http
   JELLYFIN_MCP_AUTH_TOKEN_FILE  file holding the bearer token
-  JELLYFIN_MCP_ALLOWED_HOSTS  comma-separated host names http answers to, against DNS rebinding
+  JELLYFIN_MCP_ALLOWED_HOSTS  comma-separated host names http answers to, against DNS rebinding; * for any
+
+Serving http beyond loopback needs JELLYFIN_MCP_AUTH_TOKEN or JELLYFIN_MCP_ALLOWED_HOSTS.
   JELLYFIN_MCP_READ_ONLY      true to leave out every tool that changes the server
 
 Over http, MCP is served at /mcp and a health check at /healthz.
@@ -60,7 +62,7 @@ func run() error {
 	flags := flag.NewFlagSet("jellyfin-mcp", flag.ContinueOnError)
 	flags.Usage = func() { fmt.Fprint(flags.Output(), usage) }
 	transport := flags.String("transport", env("JELLYFIN_MCP_TRANSPORT", "stdio"), "stdio or http")
-	addr := flags.String("addr", env("JELLYFIN_MCP_ADDR", ":8080"), "listen address for http")
+	addr := flags.String("addr", env("JELLYFIN_MCP_ADDR", "127.0.0.1:8080"), "listen address for http")
 	showVersion := flags.Bool("version", false, "print the version and exit")
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -112,6 +114,10 @@ func run() error {
 			return err
 		}
 		hosts := strings.FieldsFunc(os.Getenv("JELLYFIN_MCP_ALLOWED_HOSTS"), func(r rune) bool { return r == ',' || r == ' ' })
+		if token == "" && len(hosts) == 0 && !loopback(*addr) {
+			return fmt.Errorf("refusing to serve MCP on %s without protection: set JELLYFIN_MCP_AUTH_TOKEN, "+
+				"or JELLYFIN_MCP_ALLOWED_HOSTS to the host names clients use (* for any)", *addr)
+		}
 		return serveHTTP(ctx, *addr, server, token, hosts, readOnly)
 	}
 	return fmt.Errorf("unknown transport %q; use stdio or http", *transport)
@@ -125,7 +131,7 @@ func serveHTTP(ctx context.Context, addr string, server *mcp.Server, token strin
 	} else {
 		slog.Warn("serving MCP without authentication; set JELLYFIN_MCP_AUTH_TOKEN unless only trusted clients can reach it")
 	}
-	if len(hosts) > 0 {
+	if len(hosts) > 0 && !slices.Equal(hosts, []string{"*"}) {
 		h = allowHosts(hosts, h)
 	}
 	h = http.NewCrossOriginProtection().Handler(h)
@@ -182,6 +188,19 @@ func allowHosts(hosts []string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// loopback reports whether addr listens on loopback only.
+func loopback(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func env(key, def string) string {

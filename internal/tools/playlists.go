@@ -184,6 +184,9 @@ func (t *Tools) removeFromPlaylist(ctx context.Context, in playlistItemsIn) (pla
 // entries, so that names only need to be unique within the playlist.
 func playlistEntry(entries []jellyfin.Item, ref, playlist string) (string, error) {
 	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", fmt.Errorf("items must not be blank")
+	}
 	if isID(ref) {
 		for _, e := range entries {
 			if sameID(e.ID, ref) {

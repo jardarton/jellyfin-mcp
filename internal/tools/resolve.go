@@ -126,6 +126,9 @@ func splitYear(ref string) (string, int) {
 // named returns the items whose name or original title is name, and whose
 // year is year unless it is 0.
 func named(its []jellyfin.Item, name string, year int) []jellyfin.Item {
+	if name == "" {
+		return nil
+	}
 	var out []jellyfin.Item
 	for _, it := range its {
 		if (strings.EqualFold(it.Name, name) || strings.EqualFold(it.OriginalTitle, name)) &&

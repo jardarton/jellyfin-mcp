@@ -190,8 +190,8 @@ func clock(ticks int64) string {
 	return fmt.Sprintf("%d:%02d:%02d", s/3600, s/60%60, s%60)
 }
 
-// maxClock bounds positions parseClock accepts, well below tick overflow.
-const maxClock = 1000 * time.Hour
+// maxClock bounds positions parseClock accepts, in seconds, well below tick overflow.
+const maxClock = 1000 * 3600
 
 // parseClock reads h:mm:ss, m:ss or seconds into ticks.
 func parseClock(s string) (int64, error) {
@@ -207,7 +207,8 @@ func parseClock(s string) (int64, error) {
 		}
 		secs = secs*60 + n
 	}
-	if time.Duration(secs)*time.Second > maxClock {
+	// At most 3 parts of 7 digits each, so secs can't overflow.
+	if secs > maxClock {
 		return 0, fmt.Errorf("position %q is too far in", s)
 	}
 	return secs * jellyfin.TicksPerSecond, nil

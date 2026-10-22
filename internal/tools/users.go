@@ -14,8 +14,9 @@ func (t *Tools) registerUsers(server *mcp.Server) {
 	}, t.users)
 	add(t, server, tool{
 		name: "mark_played",
-		description: "Mark items watched for the user, as if played to the end: this counts a play and forgets where playback stopped. " +
-			"Marking a series, season or album marks everything in it.",
+		description: "Mark items watched for the user, as if played to the end: the play count becomes at least one " +
+			"and where playback stopped is forgotten. Marking a series, season or album marks everything in it.",
+		destructive: true,
 	}, t.markPlayed)
 	add(t, server, tool{
 		name: "mark_unplayed",
