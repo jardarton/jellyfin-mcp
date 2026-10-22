@@ -30,20 +30,23 @@ func (t *Tools) registerServer(server *mcp.Server) {
 	add(t, server, tool{
 		name: "run_task",
 		description: "Start a scheduled task now. It runs in the background; follow it with scheduled_tasks. " +
-			"Some tasks delete data, such as the ones that clean up the activity log, user data or transcodes.",
+			"Some tasks delete data, such as the ones that clean up the activity log, user data or transcodes, " +
+			"and the library scan refreshes metadata as scan_library does.",
 		destructive: true,
 	}, t.runTask)
 	add(t, server, tool{
 		name: "scan_library",
-		description: "Scan one library, or all of them, for new, changed and removed files. " +
-			"It runs in the background; new items show up in latest as they are found.",
+		description: "Scan one library, or all of them, for new, changed and removed files, as Jellyfin's scheduled scan does. " +
+			"It runs in the background; new items show up in latest as they are found. Like the scheduled scan, it re-reads " +
+			"changed files and refreshes the metadata of items due for the library's automatic refresh.",
 	}, t.scanLibrary)
 	add(t, server, tool{
 		name: "refresh_metadata",
 		description: "Re-read an item's files and look up missing metadata and images from the online providers, " +
 			"for example when a poster, overview or new episode is missing. Refreshing a series or season includes its episodes. " +
-			"Re-reading the files can overwrite existing fields: in a library that uses embedded titles, " +
-			"the name becomes the title stored in the file. Fields locked in Jellyfin are kept.",
+			"Re-reading the files recalculates runtime, streams and chapters, and can overwrite other fields: " +
+			"in a library that uses embedded titles the name becomes the title stored in the file, an embedded sort title " +
+			"replaces the sort name, and with embedded episode info episode numbers can change. A locked name is kept.",
 		destructive: true,
 	}, t.refreshMetadata)
 }

@@ -27,13 +27,13 @@ It is a single static Go binary built with the official [MCP Go SDK](https://git
 | `create_playlist`, `add_to_playlist`, `remove_from_playlist` | Manage playlists |
 | `control_playback` | Play, queue, pause, stop, skip or seek on a client |
 | `send_message` | Show a message on a client |
-| `scan_library` | Scan one or all libraries for new files |
+| `scan_library` | Scan one or all libraries for new files, as the scheduled scan does |
 | `refresh_metadata` | Re-read an item's files and look up missing metadata and images |
 | `run_task` | Start a scheduled task |
 
 Items can be given by id or by name, with an optional year: `"Metropolis (1927)"`. When a name matches several items, the error lists them with their ids.
 
-Tools carry MCP annotations, so a client or gateway can ask before risky calls. Everything that only reads is marked read-only. `mark_played` and `mark_unplayed` (which overwrite play counts and resume positions, for everything in a series or album), `refresh_metadata` (re-reading files can overwrite fields, such as names in a library that uses embedded titles), `remove_from_playlist` and `run_task` (some tasks delete data) are marked destructive.
+Tools carry MCP annotations, so a client or gateway can ask before risky calls. Everything that only reads is marked read-only. `mark_played` and `mark_unplayed` (which overwrite play counts and resume positions, for everything in a series or album), `refresh_metadata` (re-reading files can overwrite fields, such as names in a library that uses embedded titles, and recalculates runtime and chapters), `remove_from_playlist` and `run_task` (some tasks delete data) are marked destructive.
 
 Watch state, favorites, continue watching, next up and playlists belong to a Jellyfin user. Calls take a `user` name; without one they use `JELLYFIN_USER`, or the server's only user.
 
