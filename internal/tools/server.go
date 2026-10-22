@@ -40,9 +40,11 @@ func (t *Tools) registerServer(server *mcp.Server) {
 	}, t.scanLibrary)
 	add(t, server, tool{
 		name: "refresh_metadata",
-		description: "Rescan an item's files and look up missing metadata and images from the online providers, " +
-			"for example when a poster, overview or new episode is missing. Existing metadata is kept. " +
-			"Refreshing a series or season includes its episodes.",
+		description: "Re-read an item's files and look up missing metadata and images from the online providers, " +
+			"for example when a poster, overview or new episode is missing. Refreshing a series or season includes its episodes. " +
+			"Re-reading the files can overwrite existing fields: in a library that uses embedded titles, " +
+			"the name becomes the title stored in the file. Fields locked in Jellyfin are kept.",
+		destructive: true,
 	}, t.refreshMetadata)
 }
 

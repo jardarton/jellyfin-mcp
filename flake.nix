@@ -26,7 +26,7 @@
         { pkgs, self', ... }:
         let
           rev = self.shortRev or self.dirtyShortRev or "dev";
-          version = "0.1.0";
+          version = "0.1.1";
         in
         {
           packages.default = pkgs.buildGoModule {
