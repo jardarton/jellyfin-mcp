@@ -387,7 +387,7 @@ func TestReadOnly(t *testing.T) {
 		if kept != tl.Annotations.ReadOnlyHint {
 			t.Errorf("%s: readOnlyHint %v but kept in read-only mode %v", name, tl.Annotations.ReadOnlyHint, kept)
 		}
-		destructive := slices.Contains([]string{"mark_played", "mark_unplayed", "remove_from_playlist", "run_task"}, name)
+		destructive := slices.Contains([]string{"mark_played", "mark_unplayed", "refresh_metadata", "remove_from_playlist", "run_task", "scan_library"}, name)
 		if *tl.Annotations.DestructiveHint != destructive {
 			t.Errorf("%s: destructiveHint %v", name, *tl.Annotations.DestructiveHint)
 		}
