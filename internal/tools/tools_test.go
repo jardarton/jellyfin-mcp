@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ type fakeJellyfin struct {
 
 	mu      sync.Mutex
 	changes []string
+	queries []url.Values // of GET /Items
 }
 
 func newFake(t *testing.T) *fakeJellyfin {
@@ -82,7 +84,12 @@ func (f *fakeJellyfin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "Users":
 		f.json(w, f.users)
 	case r.Method == http.MethodGet && path == "Items":
+		f.mu.Lock()
+		f.queries = append(f.queries, q)
+		f.mu.Unlock()
 		f.json(w, f.query(q))
+	case r.Method == http.MethodGet && path == "System/Info":
+		f.json(w, map[string]any{"ServerName": "test", "Version": "10.11.0", "SystemArchitecture": "X64", "HasUpdateAvailable": false})
 	case r.Method == http.MethodGet && path == "Library/VirtualFolders":
 		f.json(w, []jellyfin.VirtualFolder{{Name: "Movies", ItemID: libraryID, CollectionType: "movies"}})
 	case r.Method == http.MethodGet && path == "Sessions":
@@ -90,9 +97,18 @@ func (f *fakeJellyfin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "Playlists/"+playlistID+"/Items":
 		f.json(w, jellyfin.ItemsResult{Items: []jellyfin.Item{
 			{ID: songID, Name: "Test Tone", Type: "Audio", PlaylistItemID: "entry-1"},
-			{ID: movieID, Name: "The Example", Type: "Movie", PlaylistItemID: "entry-2"},
+			{ID: movieID, Name: "The Example", Type: "Movie", ProductionYear: 1999, PlaylistItemID: "entry-2"},
 			{ID: songID, Name: "Test Tone", Type: "Audio", PlaylistItemID: "entry-3"},
+			{ID: remakeID, Name: "The Example", Type: "Movie", ProductionYear: 2021, PlaylistItemID: "entry-4"},
 		}})
+	case r.Method == http.MethodGet && path == "Shows/"+seriesID+"/Episodes":
+		var eps []jellyfin.Item
+		for i := 1; i <= 5; i++ {
+			n := i
+			eps = append(eps, jellyfin.Item{ID: strings.Repeat(strconv.Itoa(i), 32), Name: "Episode " + strconv.Itoa(i),
+				Type: "Episode", SeriesName: "Sample Show", IndexNumber: &n, UserData: &jellyfin.UserData{Played: i <= 2}})
+		}
+		f.json(w, jellyfin.ItemsResult{Items: eps, TotalRecordCount: len(eps)})
 	case strings.HasPrefix(path, "UserPlayedItems/"):
 		f.json(w, jellyfin.UserData{Played: r.Method == http.MethodPost})
 	case r.Method == http.MethodPost && path == "Playlists":
@@ -139,6 +155,13 @@ func (f *fakeJellyfin) json(w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		f.t.Error(err)
 	}
+}
+
+// lastQuery returns the last GET /Items query.
+func (f *fakeJellyfin) lastQuery() url.Values {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.queries[len(f.queries)-1]
 }
 
 func (f *fakeJellyfin) changed() []string {
@@ -203,7 +226,8 @@ func (c *client) mustCall(name string, args any, out any) {
 }
 
 func TestItemByName(t *testing.T) {
-	c := newClient(t, newFake(t), Options{})
+	f := newFake(t)
+	c := newClient(t, f, Options{})
 
 	var it itemDetails
 	c.mustCall("get_item", map[string]any{"item": "the example (2021)"}, &it)
@@ -219,7 +243,13 @@ func TestItemByName(t *testing.T) {
 		t.Errorf("by id: %+v", it.item)
 	}
 
+	if f := f.lastQuery().Get("fields"); !strings.Contains(f, "OriginalTitle") {
+		t.Errorf("get_item by id asked for fields %q", f)
+	}
 	msg := c.call("get_item", map[string]any{"item": "The Example"}, nil)
+	if f := f.lastQuery().Get("fields"); f != "OriginalTitle" {
+		t.Errorf("name lookup asked for fields %q", f)
+	}
 	if !strings.Contains(msg, movieID) || !strings.Contains(msg, remakeID) {
 		t.Errorf("ambiguous name: %q should list both ids", msg)
 	}
@@ -256,11 +286,18 @@ func TestUser(t *testing.T) {
 		t.Errorf("default user %q, want Bob", users.DefaultUser)
 	}
 	var changed changedOut
-	c.mustCall("set_played", map[string]any{"items": []string{"Sample Show"}, "played": true}, &changed)
+	c.mustCall("mark_played", map[string]any{"items": []string{"Sample Show"}}, &changed)
 	if changed.User != "Bob" || !changed.Items[0].UserState.Played {
-		t.Errorf("set_played: %+v", changed)
+		t.Errorf("mark_played: %+v", changed)
 	}
-	if got, want := f.changed(), []string{"POST UserPlayedItems/" + seriesID + "?userId=" + bobID}; !slices.Equal(got, want) {
+	c.mustCall("mark_unplayed", map[string]any{"items": []string{"The Example (1999)"}, "user": "alice"}, &changed)
+	if changed.User != "Alice" || changed.Items[0].UserState.Played {
+		t.Errorf("mark_unplayed: %+v", changed)
+	}
+	if got, want := f.changed(), []string{
+		"POST UserPlayedItems/" + seriesID + "?userId=" + bobID,
+		"DELETE UserPlayedItems/" + movieID + "?userId=" + aliceID,
+	}; !slices.Equal(got, want) {
 		t.Errorf("requests %q, want %q", got, want)
 	}
 }
@@ -298,9 +335,23 @@ func TestRemoveFromPlaylist(t *testing.T) {
 	c := newClient(t, f, Options{DefaultUser: "Alice"})
 
 	c.mustCall("remove_from_playlist", map[string]any{"playlist": "road trip", "items": []string{"test tone"}}, nil)
-	want := []string{"DELETE Playlists/" + playlistID + "/Items?entryIds=entry-1%2Centry-3"}
+	c.mustCall("remove_from_playlist", map[string]any{"playlist": "Road Trip", "items": []string{"The Example (2021)", movieID}}, nil)
+	want := []string{
+		"DELETE Playlists/" + playlistID + "/Items?entryIds=entry-1%2Centry-3",
+		"DELETE Playlists/" + playlistID + "/Items?entryIds=entry-4%2Centry-2",
+	}
 	if got := f.changed(); !slices.Equal(got, want) {
 		t.Errorf("requests %q, want %q", got, want)
+	}
+	if msg := c.call("remove_from_playlist", map[string]any{"playlist": "Road Trip", "items": []string{"Test Tone", "   "}}, nil); !strings.Contains(msg, "blank") {
+		t.Errorf("blank item: %q", msg)
+	}
+	if got := f.changed(); len(got) != len(want) {
+		t.Errorf("a refused removal still sent %q", got[len(want):])
+	}
+	msg := c.call("remove_from_playlist", map[string]any{"playlist": "Road Trip", "items": []string{"The Example"}}, nil)
+	if !strings.Contains(msg, "several items match") || !strings.Contains(msg, movieID) || !strings.Contains(msg, remakeID) {
+		t.Errorf("two different items with one name: %q", msg)
 	}
 	if msg := c.call("remove_from_playlist", map[string]any{"playlist": "Road Trip", "items": []string{"Sample Show"}}, nil); !strings.Contains(msg, "is not in playlist") {
 		t.Errorf("item not in playlist: %q", msg)
@@ -336,7 +387,8 @@ func TestReadOnly(t *testing.T) {
 		if kept != tl.Annotations.ReadOnlyHint {
 			t.Errorf("%s: readOnlyHint %v but kept in read-only mode %v", name, tl.Annotations.ReadOnlyHint, kept)
 		}
-		if *tl.Annotations.DestructiveHint != (name == "remove_from_playlist") {
+		destructive := slices.Contains([]string{"mark_played", "mark_unplayed", "remove_from_playlist", "run_task"}, name)
+		if *tl.Annotations.DestructiveHint != destructive {
 			t.Errorf("%s: destructiveHint %v", name, *tl.Annotations.DestructiveHint)
 		}
 	}
@@ -346,13 +398,13 @@ func TestClock(t *testing.T) {
 	for _, tc := range []struct {
 		in   string
 		secs int64
-	}{{"45", 45}, {"1:30", 90}, {"1:02:03", 3723}, {" 0:00:07 ", 7}} {
+	}{{"45", 45}, {"1:30", 90}, {"1:02:03", 3723}, {" 0:00:07 ", 7}, {"1000:00:00", 3_600_000}} {
 		got, err := parseClock(tc.in)
 		if err != nil || got != tc.secs*jellyfin.TicksPerSecond {
 			t.Errorf("parseClock(%q) = %d, %v; want %d s", tc.in, got, err, tc.secs)
 		}
 	}
-	for _, bad := range []string{"", "1:xx", "-5", "1::2"} {
+	for _, bad := range []string{"", "1:xx", "-5", "1::2", "1m30s", "1:90", "1:2:3:4", "99999999999999", "1000:00:01", "3000000:00:00"} {
 		if _, err := parseClock(bad); err == nil {
 			t.Errorf("parseClock(%q) succeeded", bad)
 		}
@@ -387,5 +439,64 @@ func TestTimes(t *testing.T) {
 	}
 	if _, err := parseSince("last week", now); err == nil {
 		t.Error("parseSince accepted prose")
+	}
+}
+
+func TestFindItemsSort(t *testing.T) {
+	f := newFake(t)
+	c := newClient(t, f, Options{})
+	for _, args := range []map[string]any{{"query": "example", "sort": "rating"}, {"query": "example", "order": "desc"}} {
+		if msg := c.call("find_items", args, nil); !strings.Contains(msg, "don't apply with query") {
+			t.Errorf("%v: %q", args, msg)
+		}
+	}
+	for _, tc := range []struct {
+		args      map[string]any
+		by, order string
+	}{
+		{map[string]any{"types": []string{"Movie"}}, "SortName", "Ascending"},
+		{map[string]any{"sort": "rating"}, "CommunityRating,SortName", "Descending"},
+		{map[string]any{"sort": "rating", "order": "asc"}, "CommunityRating,SortName", "Ascending"},
+		{map[string]any{"query": "example"}, "", ""},
+	} {
+		c.mustCall("find_items", tc.args, nil)
+		q := f.lastQuery()
+		if q.Get("sortBy") != tc.by || q.Get("sortOrder") != tc.order {
+			t.Errorf("%v: sortBy %q sortOrder %q, want %q %q", tc.args, q.Get("sortBy"), q.Get("sortOrder"), tc.by, tc.order)
+		}
+	}
+}
+
+func TestServerInfo(t *testing.T) {
+	c := newClient(t, newFake(t), Options{})
+	var out map[string]any
+	c.mustCall("server_info", map[string]any{}, &out)
+	for _, k := range []string{"architecture", "os", "update_available"} {
+		if _, ok := out[k]; ok {
+			t.Errorf("server_info reports %s, which Jellyfin no longer fills in", k)
+		}
+	}
+	if out["version"] != "10.11.0" {
+		t.Errorf("server_info: %v", out)
+	}
+}
+
+func TestEpisodesPaging(t *testing.T) {
+	c := newClient(t, newFake(t), Options{DefaultUser: "Alice"})
+
+	var out episodesOut
+	c.mustCall("episodes", map[string]any{"series": "Sample Show", "limit": 2}, &out)
+	if len(out.Episodes) != 2 || out.Total != 5 || out.Unplayed != 3 || out.NextOffset != 2 {
+		t.Errorf("first page: %d episodes, total %d, unplayed %d, next %d", len(out.Episodes), out.Total, out.Unplayed, out.NextOffset)
+	}
+	out = episodesOut{}
+	c.mustCall("episodes", map[string]any{"series": "Sample Show", "limit": 2, "offset": 4}, &out)
+	if len(out.Episodes) != 1 || *out.Episodes[0].Episode != 5 || out.NextOffset != 0 {
+		t.Errorf("last page: %+v", out)
+	}
+	out = episodesOut{}
+	c.mustCall("episodes", map[string]any{"series": "Sample Show", "unplayed_only": true}, &out)
+	if len(out.Episodes) != 3 || out.Total != 3 || *out.Episodes[0].Episode != 3 {
+		t.Errorf("unplayed only: %+v", out)
 	}
 }

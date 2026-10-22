@@ -27,7 +27,8 @@ func (t *Tools) registerLibrary(server *mcp.Server) {
 	add(t, server, tool{
 		name: "find_items",
 		description: "Search or browse the library. Filter by words in the title, type, library, genre, year, person, " +
-			"and, for the user, watched state and favorites. Without a query it lists everything that matches the filters, sorted by name. " +
+			"and, for the user, watched state and favorites. A query is matched against titles and ordered by relevance; " +
+			"without one it lists everything that matches the filters, sorted as asked. " +
 			"Returns a page of items and the total, so use offset to read on.",
 		enums: map[string][]string{
 			"types": searchTypes,
@@ -111,7 +112,7 @@ type findIn struct {
 	Person   string   `json:"person,omitempty" jsonschema:"actor, director or other person, by name"`
 	Played   *bool    `json:"played,omitempty" jsonschema:"true for only watched, false for only unwatched, by the user"`
 	Favorite *bool    `json:"favorite,omitempty" jsonschema:"true for only the user's favorites"`
-	Sort     string   `json:"sort,omitempty" jsonschema:"defaults to relevance with a query, else name"`
+	Sort     string   `json:"sort,omitempty" jsonschema:"defaults to name; not with query, which is always ordered by relevance"`
 	Order    string   `json:"order,omitempty" jsonschema:"defaults to the natural order of sort: newest, highest or most first"`
 	Limit    int      `json:"limit,omitempty" jsonschema:"page size, default 20, at most 100"`
 	Offset   int      `json:"offset,omitempty"`
@@ -162,26 +163,28 @@ func (t *Tools) findItems(ctx context.Context, in findIn) (itemsOut, error) {
 		}
 		q.ParentID = lib.ItemID
 	}
-	sort := in.Sort
-	if sort == "" && q.SearchTerm == "" {
-		sort = "name"
+	// Jellyfin orders text searches by relevance and name before any sort.
+	if q.SearchTerm != "" && (in.Sort != "" || in.Order != "") {
+		return itemsOut{}, fmt.Errorf("sort and order don't apply with query, whose results come by relevance; " +
+			"filter without query to sort, or sort the results yourself")
 	}
-	if sort != "" {
+	if q.SearchTerm == "" {
+		sort := in.Sort
+		if sort == "" {
+			sort = "name"
+		}
 		s, ok := sorts[sort]
 		if !ok {
 			return itemsOut{}, fmt.Errorf("unknown sort %q", sort)
 		}
 		q.SortBy = strings.Split(s.by, ",")
 		q.SortOrder = s.order
-	}
-	switch in.Order {
-	case "asc":
-		q.SortOrder = "Ascending"
-	case "desc":
-		q.SortOrder = "Descending"
-	}
-	if q.SortOrder != "" && len(q.SortBy) == 0 {
-		q.SortBy = []string{"SortName"}
+		switch in.Order {
+		case "asc":
+			q.SortOrder = "Ascending"
+		case "desc":
+			q.SortOrder = "Descending"
+		}
 	}
 
 	r, err := t.c.Items(ctx, q)
@@ -421,19 +424,19 @@ type episodesIn struct {
 	Series       string `json:"series" jsonschema:"series id or name"`
 	Season       *int   `json:"season,omitempty" jsonschema:"season number; 0 is specials; omit for all seasons"`
 	UnplayedOnly bool   `json:"unplayed_only,omitempty" jsonschema:"only episodes the user has not watched"`
+	Limit        int    `json:"limit,omitempty" jsonschema:"page size, default 100, at most 200"`
+	Offset       int    `json:"offset,omitempty"`
 	userIn
 }
 
 type episodesOut struct {
-	Series   string `json:"series"`
-	SeriesID string `json:"series_id"`
-	Episodes []item `json:"episodes"`
-	Total    int    `json:"total"`
-	Unplayed int    `json:"unplayed"`
+	Series     string `json:"series"`
+	SeriesID   string `json:"series_id"`
+	Episodes   []item `json:"episodes"`
+	Total      int    `json:"total" jsonschema:"matching episodes, on every page"`
+	Unplayed   int    `json:"unplayed" jsonschema:"unwatched episodes among them"`
+	NextOffset int    `json:"next_offset,omitempty" jsonschema:"pass as offset for the next page; absent on the last page"`
 }
-
-// maxEpisodes caps an episode list so a long-running show stays readable.
-const maxEpisodes = 200
 
 func (t *Tools) episodes(ctx context.Context, in episodesIn) (episodesOut, error) {
 	userID, err := t.optionalUser(ctx, in.User)
@@ -459,16 +462,20 @@ func (t *Tools) episodes(ctx context.Context, in episodesIn) (episodesOut, error
 		return episodesOut{}, err
 	}
 	out := episodesOut{Series: s.Name, SeriesID: s.ID, Episodes: []item{}}
+	offset, limit := max(in.Offset, 0), clampLimit(in.Limit, 100, 200)
 	for _, e := range r.Items {
 		if e.UserData != nil && !e.UserData.Played {
 			out.Unplayed++
 		} else if in.UnplayedOnly {
 			continue
 		}
-		out.Total++
-		if len(out.Episodes) < maxEpisodes {
+		if out.Total >= offset && len(out.Episodes) < limit {
 			out.Episodes = append(out.Episodes, toItem(e))
 		}
+		out.Total++
+	}
+	if next := offset + len(out.Episodes); next < out.Total {
+		out.NextOffset = next
 	}
 	return out, nil
 }

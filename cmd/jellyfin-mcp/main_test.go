@@ -52,3 +52,43 @@ func TestSecret(t *testing.T) {
 		t.Error("missing file succeeded")
 	}
 }
+
+func TestLoopback(t *testing.T) {
+	for addr, want := range map[string]bool{
+		"127.0.0.1:8080": true,
+		"[::1]:8080":     true,
+		"localhost:8080": true,
+		":8080":          false,
+		"0.0.0.0:8080":   false,
+		"[::]:8080":      false,
+		"10.0.0.5:8080":  false,
+		"example:8080":   false,
+		"garbage":        false,
+	} {
+		if got := loopback(addr); got != want {
+			t.Errorf("loopback(%q) = %v", addr, got)
+		}
+	}
+}
+
+func TestAllowHosts(t *testing.T) {
+	h := allowHosts([]string{"jellyfin-mcp", "mcp.example.com", "::1"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	for host, want := range map[string]int{
+		"jellyfin-mcp:8080":     http.StatusTeapot,
+		"JELLYFIN-MCP":          http.StatusTeapot,
+		"mcp.example.com.":      http.StatusTeapot,
+		"[::1]:8080":            http.StatusTeapot,
+		"attacker.example:8080": http.StatusForbidden,
+		"10.0.0.5:8080":         http.StatusForbidden,
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+		r.Host = host
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Errorf("Host %q: %d, want %d", host, w.Code, want)
+		}
+	}
+}

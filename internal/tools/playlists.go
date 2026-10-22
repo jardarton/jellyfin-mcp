@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,7 +27,7 @@ func (t *Tools) registerPlaylists(server *mcp.Server) {
 	}, t.addToPlaylist)
 	add(t, server, tool{
 		name:        "remove_from_playlist",
-		description: "Remove items from one of the user's playlists. Every entry of a given item is removed.",
+		description: "Remove items from one of the user's playlists. Every entry of a given item is removed; a name that matches different items in the playlist is refused.",
 		destructive: true,
 	}, t.removeFromPlaylist)
 }
@@ -161,26 +162,53 @@ func (t *Tools) removeFromPlaylist(ctx context.Context, in playlistItemsIn) (pla
 		return playlistOut{}, err
 	}
 
-	// Match against the playlist's own entries so names only need to be
-	// unique within the playlist.
 	var entries []string
 	for _, ref := range in.Items {
-		ref = strings.TrimSpace(ref)
-		found := false
-		for _, e := range r.Items {
-			if sameID(e.ID, ref) || strings.EqualFold(e.Name, ref) {
-				entries = append(entries, e.PlaylistItemID)
-				found = true
-			}
+		id, err := playlistEntry(r.Items, ref, p.Name)
+		if err != nil {
+			return playlistOut{}, err
 		}
-		if !found {
-			return playlistOut{}, fmt.Errorf("%q is not in playlist %s", ref, p.Name)
+		for _, e := range r.Items {
+			if e.ID == id {
+				entries = append(entries, e.PlaylistItemID)
+			}
 		}
 	}
 	if err := t.c.RemoveFromPlaylist(ctx, p.ID, entries); err != nil {
 		return playlistOut{}, err
 	}
 	return t.playlistAfter(ctx, u, p.ID)
+}
+
+// playlistEntry finds the item a reference means among a playlist's
+// entries, so that names only need to be unique within the playlist.
+func playlistEntry(entries []jellyfin.Item, ref, playlist string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", fmt.Errorf("items must not be blank")
+	}
+	if isID(ref) {
+		for _, e := range entries {
+			if sameID(e.ID, ref) {
+				return e.ID, nil
+			}
+		}
+		return "", fmt.Errorf("%s is not in playlist %s", ref, playlist)
+	}
+	name, year := splitYear(ref)
+	var distinct []jellyfin.Item
+	for _, e := range named(entries, name, year) {
+		if !slices.ContainsFunc(distinct, func(d jellyfin.Item) bool { return d.ID == e.ID }) {
+			distinct = append(distinct, e)
+		}
+	}
+	switch len(distinct) {
+	case 0:
+		return "", fmt.Errorf("%q is not in playlist %s", ref, playlist)
+	case 1:
+		return distinct[0].ID, nil
+	}
+	return "", ambiguous(ref, distinct)
 }
 
 func (t *Tools) playlistAfter(ctx context.Context, u jellyfin.User, id string) (playlistOut, error) {
